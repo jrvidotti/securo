@@ -1,5 +1,6 @@
 server {
     listen 8080;
+    listen [::]:8080;
     root /usr/share/nginx/html;
     index index.html;
 
@@ -9,9 +10,11 @@ server {
     # upstream IP when the config loads and returns 502s after the backend
     # container is recreated with a new IP (e.g. selective redeploys where the
     # frontend container is left running). Using a variable in proxy_pass forces
-    # re-resolution; the resolver below is the Docker daemon's internal DNS.
+    # re-resolution. NGINX_RESOLVER defaults to the Docker daemon's internal
+    # DNS (see Dockerfile); override it on platforms with a different internal
+    # resolver, e.g. Railway: NGINX_RESOLVER="[fd12::10] ipv6=on".
     location /api/ {
-        resolver 127.0.0.11 valid=5s;
+        resolver ${NGINX_RESOLVER} valid=5s;
         set $upstream ${BACKEND_URL};
         proxy_pass $upstream;
         proxy_set_header Host $host;
