@@ -2,7 +2,7 @@
 
 [Railway](https://railway.com) does not run `docker-compose.yml` files. Each service in
 `docker-compose.prod.yml` becomes a separate Railway service, all built from this repo.
-You end up with five services.
+You end up with five services — six if you also run the agents MCP server (§7).
 
 You can drag a Compose file onto the project canvas, but the import ignores `command`,
 `depends_on`, `profiles`, YAML anchors (`x-backend-env`) and `${VAR:-default}` interpolation,
@@ -200,14 +200,110 @@ A 502 on `/` is an edge/target-port problem, not an nginx one: that location is 
 `try_files` with no upstream and cannot itself emit a 502. A 502 only on `/api/` points at
 `BACKEND_URL` or at the backend not listening on `::`.
 
-## Optional: the agents MCP server
+## 7. Optional: the agents MCP server
 
-Only if `AGENTS_ENABLED=true`. A sixth service from the same repo, Root Directory `backend`:
+`backend/mcp_server/main.py` is a second FastAPI app in the same image: JSON-RPC 2.0 on
+`POST /mcp`, plus `GET /health`. It exposes ~30 Securo tools — read ones (`list_transactions`,
+`get_net_worth`, `get_dashboard_snapshot`, `search_all`, `aggregate`, `get_group_balances`…) and
+write ones that only ever create a proposal for you to approve in the UI
+(`propose_create_transaction`, `propose_categorize`, `propose_create_budget`…).
+
+It has no session and no cookie. Every call carries `Authorization: Bearer <JWT>`, verified in
+`mcp_server/auth.py` against `AGENTS_MCP_JWT_SECRET` (HS256, `iss=securo-backend`,
+`aud=securo-mcp`); the token's `sub` and `ws_id` claims are what scope the data. Two things mint
+that token, both in the backend: the agent runtime, per call, with a 600 s TTL; and
+**Agents → Connections → External MCP access** in the UI, with a 90-day TTL
+(`AGENTS_MCP_EXTERNAL_TTL_DAYS`) for Claude Desktop/Code, Cursor, n8n or the OpenAI Responses API.
+
+### The service
+
+Same repo, **Root Directory `backend`**, no volume:
 
 ```
 uvicorn mcp_server.main:app --host :: --port 8765
 ```
 
-Give it its own public domain (target port 8765) for external clients, and set
-`AGENTS_BUILTIN_MCP_URL=http://${{mcp-server.RAILWAY_PRIVATE_DOMAIN}}:8765/mcp` on the backend and
-the worker.
+**Networking → Generate Domain, target port 8765** — needed only for external clients; the
+backend itself reaches this service over the private network. Same trap as the frontend: `8765`
+is the *container* port, and Railway's edge still serves the domain on 443. External clients
+therefore use `https://<mcp-domain>/mcp`, never `:8765`.
+
+```
+DATABASE_URL="${{pgvector.DATABASE_URL_PRIVATE}}"
+REDIS_URL="${{Redis.REDIS_URL}}"
+AGENTS_ENABLED="true"
+AGENTS_MCP_JWT_SECRET="${{shared.AGENTS_MCP_JWT_SECRET}}"
+AGENTS_KNOWLEDGE_STORAGE_PATH="${{shared.AGENTS_KNOWLEDGE_STORAGE_PATH}}"
+SECRET_KEY="${{shared.SECRET_KEY}}"
+```
+
+The tools query the database directly, which is why `DATABASE_URL` is not optional here. A
+secret that differs from the backend's is the single most common failure: it produces a 401 on
+every call, with nothing else wrong.
+
+### What the backend and the worker need
+
+On **`backend`**:
+
+```
+AGENTS_ENABLED="true"
+AGENTS_BUILTIN_MCP_URL="http://${{mcp-server.RAILWAY_PRIVATE_DOMAIN}}:8765/mcp"
+AGENTS_EXTERNAL_MCP_URL="https://${{mcp-server.RAILWAY_PUBLIC_DOMAIN}}/mcp"
+```
+
+`AGENTS_ENABLED` is the master switch: `app/main.py` mounts the whole `/api/agents` router only
+when it is on, so without it the token endpoint 404s and the Connections page has nothing to
+talk to.
+
+`AGENTS_EXTERNAL_MCP_URL` is the one that fails silently. It is only a display value — the URL
+the token panel puts in the snippets it hands the user. Left empty, the frontend falls back to
+deriving `<protocol>//<hostname>:8765/mcp` from the browser location
+(`frontend/src/components/agents/mcp-external-panel.tsx`), which is right for Docker Compose and
+wrong on Railway, where nothing listens on 8765 at the edge. The copied config then points
+nowhere while the server itself is perfectly healthy. Note there is no way to serve MCP from the
+frontend's domain instead: its nginx proxies `/api/` only, so the MCP service needs a domain of
+its own.
+
+On **`worker`**, only `AGENTS_ENABLED="true"`. Its one agents task is knowledge ingestion
+(`app/agents/tasks/ingest.py`) — it never calls the MCP server, so `AGENTS_BUILTIN_MCP_URL` there
+would be dead configuration.
+
+### Verification
+
+```
+https://<mcp-domain>/health          → {"status":"ok","tools":29}
+```
+
+Then mint a token in the UI (**Agents → Connections → External MCP access**; it requires write
+access to the workspace, because the tool set can create proposals) and call the server with it:
+
+```bash
+curl -X POST https://<mcp-domain>/mcp \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+The panel also prints a ready-made config per client. For Claude Desktop, Claude Code and Cursor
+it is:
+
+```json
+{ "mcpServers": { "securo": {
+  "url": "https://<mcp-domain>/mcp",
+  "headers": { "Authorization": "Bearer <token>" } } } }
+```
+
+A token is bound to the workspace that was active when it was minted. For a second workspace,
+switch in the UI and mint again.
+
+### Two rough edges on Railway
+
+- **Knowledge-base ingestion does not work as laid out here.** The upload endpoint writes the
+  file to the backend's volume (`/app/data/agent_knowledge`) and dispatches
+  `ingest_doc` to the worker, which reads it back by path — and the worker has no volume, so the
+  read fails and the document stays in `failed`. Chat and every non-knowledge tool are
+  unaffected. Fixing it means giving the ingestion a storage both services can see.
+- **No volume on the MCP service** means `AGENTS_EMBEDDING_PROVIDER=native` re-downloads the
+  fastembed model (~100 MB) into `/app/data/embedding_models` on every cold start. This only
+  affects `search_knowledge_base`, which in turn only runs inside an agent conversation — an
+  external token never reaches it, since the tool requires an `agent_id` claim. Mount a volume at
+  `/app/data` here too, or switch to `openai`/`ollama`, if it bothers you.
