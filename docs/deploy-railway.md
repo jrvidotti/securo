@@ -53,9 +53,9 @@ egress. Useful for a database client or a one-off script; the app does not need 
 
 - **Leave Root Directory at the repository root.** The image contains both the frontend build and
   the backend, so the build context needs both trees.
-- **Set `RAILWAY_DOCKERFILE_PATH` before the first deploy.** It is in the variables below, and it
-  is the one that stops the build rather than the app: Railway looks for `./Dockerfile`, does not
-  find one, and falls back to its Railpack autodetector — see §4.
+- **Settings → Build: set Dockerfile Path to `/backend/Dockerfile.aio`** before the first deploy.
+  This is the one setting that stops the build rather than the app: Railway looks for
+  `./Dockerfile`, does not find one, and falls back to its Railpack autodetector — see §4.
 - **Custom Start Command: leave it empty.** The image's entrypoint runs the migrations, then
   uvicorn and a Celery worker with beat embedded. A start command here would fight it.
 - **Volume:** one, mounted at **`/app/data`**. Attachments, the agents knowledge store, the
@@ -71,7 +71,6 @@ egress. Useful for a database client or a one-off script; the app does not need 
 ### Variables
 
 ```
-RAILWAY_DOCKERFILE_PATH="backend/Dockerfile.aio"
 DATABASE_URL="${{pgvector.DATABASE_URL_PRIVATE}}"
 REDIS_URL="${{Redis.REDIS_URL}}"
 FRONTEND_URL="https://${{RAILWAY_PUBLIC_DOMAIN}}"
@@ -82,16 +81,8 @@ CELERY_CONCURRENCY="1"
 
 Generate `SECRET_KEY` yourself — Railway does not run shell commands in variables.
 
-Three of these are worth explaining:
+Two of these are worth explaining:
 
-- **`RAILWAY_DOCKERFILE_PATH`** — Railway builds `./Dockerfile` by default and there is none at
-  the repository root. The path is relative to that root.
-
-  A `railway.json` build config would express this without a manual step, and it is tempting.
-  Don't: Railway deprecated Config as Code, services that never used it cannot opt in after
-  2026-08-28, and the files stop working on 2026-12-01. Its replacement, Infrastructure as Code
-  (`.railway/railway.ts`), defines a whole project in TypeScript and documents no equivalent of
-  `dockerfilePath`. The variable is the durable answer.
 - **`FRONTEND_URL`** is not just a CORS setting: it builds the bank OAuth callback URL
   (`app/providers/base.py`) and the OIDC redirect URI (`app/api/oidc_auth.py`). Referencing
   `RAILWAY_PUBLIC_DOMAIN` with no service prefix gives this service's own domain.
@@ -159,15 +150,12 @@ using build driver railpack-v0.38.0
 ```
 
 Railway never saw the Dockerfile and fell back to autodetection, which cannot make sense of a
-repo that is a Python backend and a Vite frontend at once. `RAILWAY_DOCKERFILE_PATH` is unset, or
-set to a path that is not relative to the repository root:
+repo that is a Python backend and a Vite frontend at once. The Dockerfile path is empty, or points
+somewhere that does not exist. Check **Settings → Build → Dockerfile Path** and set it to:
 
 ```
-RAILWAY_DOCKERFILE_PATH="backend/Dockerfile.aio"
+/backend/Dockerfile.aio
 ```
-
-The build log is the quickest way to confirm it: Railway passes every variable the service has to
-the builder as `--env NAME` arguments, so the failing log lists exactly what was set.
 
 **The domain returns 502 although the build succeeded, and the deploy logs look healthy.**
 
