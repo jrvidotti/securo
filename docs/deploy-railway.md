@@ -52,21 +52,26 @@ egress. Useful for a database client or a one-off script; the app does not need 
 **+ New → GitHub Repo**, pointing at this repository.
 
 - **Leave Root Directory at the repository root.** The image contains both the frontend build and
-  the backend, so the build context needs both trees — and Railway looks for `railway.json`
-  relative to that root.
-- **Nothing to configure for the build.** `railway.json` at the repository root already points
-  Railway at `backend/Dockerfile.aio`. Without it Railway finds no `./Dockerfile`, falls back to
-  its Railpack autodetector and the build dies with *"No start command detected"* — see §4.
+  the backend, so the build context needs both trees.
+- **Set `RAILWAY_DOCKERFILE_PATH` before the first deploy.** It is in the variables below, and it
+  is the one that stops the build rather than the app: Railway looks for `./Dockerfile`, does not
+  find one, and falls back to its Railpack autodetector — see §4.
 - **Custom Start Command: leave it empty.** The image's entrypoint runs the migrations, then
   uvicorn and a Celery worker with beat embedded. A start command here would fight it.
 - **Volume:** one, mounted at **`/app/data`**. Attachments, the agents knowledge store, the
   embedding-model cache and the Celery beat schedule all live under it.
 - **Networking → Generate Domain.** The entrypoint binds to the `PORT` Railway injects, falling
   back to 8000, so let Railway detect the port. If you pin it by hand, pin it to the same value.
+- **Settings → Deploy:** set **Healthcheck Path** to `/api/health` and **Restart Policy** to
+  *On Failure*. Neither is required, but the healthcheck is what stops Railway routing traffic to
+  a container whose migrations are still running, and *On Failure* matches how the entrypoint
+  signals a dead process. Give the healthcheck a generous timeout — the first boot of a fresh
+  database runs every migration.
 
 ### Variables
 
 ```
+RAILWAY_DOCKERFILE_PATH="backend/Dockerfile.aio"
 DATABASE_URL="${{pgvector.DATABASE_URL_PRIVATE}}"
 REDIS_URL="${{Redis.REDIS_URL}}"
 FRONTEND_URL="https://${{RAILWAY_PUBLIC_DOMAIN}}"
@@ -78,8 +83,16 @@ CELERY_CONCURRENCY="1"
 
 Generate `SECRET_KEY` yourself — Railway does not run shell commands in variables.
 
-Three of these are worth explaining:
+Four of these are worth explaining:
 
+- **`RAILWAY_DOCKERFILE_PATH`** — Railway builds `./Dockerfile` by default and there is none at
+  the repository root. The path is relative to that root.
+
+  A `railway.json` build config would express this without a manual step, and it is tempting.
+  Don't: Railway deprecated Config as Code, services that never used it cannot opt in after
+  2026-08-28, and the files stop working on 2026-12-01. Its replacement, Infrastructure as Code
+  (`.railway/railway.ts`), defines a whole project in TypeScript and documents no equivalent of
+  `dockerfilePath`. The variable is the durable answer.
 - **`UVICORN_HOST="::"`** — Railway's private network is IPv6-only. `::` binds both stacks, so it
   is also correct for the public domain.
 - **`FRONTEND_URL`** is not just a CORS setting: it builds the bank OAuth callback URL
@@ -148,19 +161,16 @@ using build driver railpack-v0.38.0
 ✖ No start command detected. Specify a start command
 ```
 
-Railway never saw the Dockerfile and fell back to autodetection, which cannot make sense of this
-repo. Either `railway.json` is not on the branch you deployed, or the service's **Root Directory
-is not the repository root** — Railway resolves `railway.json` relative to that root, so a
-service still pointing at `backend` will never find it.
-
-The fallback is a service variable, taking the same path relative to the repository root:
+Railway never saw the Dockerfile and fell back to autodetection, which cannot make sense of a
+repo that is a Python backend and a Vite frontend at once. `RAILWAY_DOCKERFILE_PATH` is unset, or
+set to a path that is not relative to the repository root:
 
 ```
 RAILWAY_DOCKERFILE_PATH="backend/Dockerfile.aio"
 ```
 
-The build log lists every variable the service has, as `--env NAME` arguments. That list is the
-quickest way to confirm what is actually set.
+The build log is the quickest way to confirm it: Railway passes every variable the service has to
+the builder as `--env NAME` arguments, so the failing log lists exactly what was set.
 
 **The domain returns 502 although the build succeeded.** Check `UVICORN_HOST` is `::`. Bound to
 `0.0.0.0`, the app is unreachable over Railway's IPv6-only network.
