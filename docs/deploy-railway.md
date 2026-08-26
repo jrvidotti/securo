@@ -75,7 +75,6 @@ RAILWAY_DOCKERFILE_PATH="backend/Dockerfile.aio"
 DATABASE_URL="${{pgvector.DATABASE_URL_PRIVATE}}"
 REDIS_URL="${{Redis.REDIS_URL}}"
 FRONTEND_URL="https://${{RAILWAY_PUBLIC_DOMAIN}}"
-UVICORN_HOST="::"
 SECRET_KEY="<openssl rand -base64 32>"
 STORAGE_LOCAL_PATH="/app/data/attachments"
 CELERY_CONCURRENCY="1"
@@ -83,7 +82,7 @@ CELERY_CONCURRENCY="1"
 
 Generate `SECRET_KEY` yourself — Railway does not run shell commands in variables.
 
-Four of these are worth explaining:
+Three of these are worth explaining:
 
 - **`RAILWAY_DOCKERFILE_PATH`** — Railway builds `./Dockerfile` by default and there is none at
   the repository root. The path is relative to that root.
@@ -93,8 +92,6 @@ Four of these are worth explaining:
   2026-08-28, and the files stop working on 2026-12-01. Its replacement, Infrastructure as Code
   (`.railway/railway.ts`), defines a whole project in TypeScript and documents no equivalent of
   `dockerfilePath`. The variable is the durable answer.
-- **`UVICORN_HOST="::"`** — Railway's private network is IPv6-only. `::` binds both stacks, so it
-  is also correct for the public domain.
 - **`FRONTEND_URL`** is not just a CORS setting: it builds the bank OAuth callback URL
   (`app/providers/base.py`) and the OIDC redirect URI (`app/api/oidc_auth.py`). Referencing
   `RAILWAY_PUBLIC_DOMAIN` with no service prefix gives this service's own domain.
@@ -172,8 +169,20 @@ RAILWAY_DOCKERFILE_PATH="backend/Dockerfile.aio"
 The build log is the quickest way to confirm it: Railway passes every variable the service has to
 the builder as `--env NAME` arguments, so the failing log lists exactly what was set.
 
-**The domain returns 502 although the build succeeded.** Check `UVICORN_HOST` is `::`. Bound to
-`0.0.0.0`, the app is unreachable over Railway's IPv6-only network.
+**The domain returns 502 although the build succeeded, and the deploy logs look healthy.**
+
+Two causes, and the HTTP logs tell them apart — check them in the service's *Observability* tab,
+or `railway logs --type http`:
+
+- `connection refused` from the proxy means the app is listening on the wrong *host*. The
+   entrypoint binds `0.0.0.0`, which is what
+   [Railway requires](https://docs.railway.com/networking/troubleshooting/application-failed-to-respond)
+   for the public edge — so this only happens if you have overridden the bind host. Do not: an
+   IPv6-only bind is refused by the edge, however healthy `Uvicorn running on http://[::]:…` looks
+   in the deploy logs. Railway's private network is IPv6, but in this topology nothing uses it.
+- No upstream errors, or a target-port mismatch, means the app is listening on the wrong *port*.
+  Railway injects `PORT` and the entrypoint honours it, so the domain's target port must equal
+  whatever `Uvicorn running on` reports — not necessarily the 8000 default.
 
 **Migrations fail with `pgvector is not installed`.** Wrong Postgres template — see §1.
 
@@ -194,7 +203,7 @@ In this topology it runs inside the app process, so there is no service to creat
 AGENTS_ENABLED="true"
 AGENTS_MCP_INPROCESS="true"
 AGENTS_MCP_JWT_SECRET="<openssl rand -base64 32>"
-AGENTS_BUILTIN_MCP_URL="http://127.0.0.1:8000/mcp"
+AGENTS_BUILTIN_MCP_URL="http://127.0.0.1:8080/mcp"
 AGENTS_EXTERNAL_MCP_URL="https://${{RAILWAY_PUBLIC_DOMAIN}}/mcp"
 ```
 
@@ -202,8 +211,10 @@ AGENTS_EXTERNAL_MCP_URL="https://${{RAILWAY_PUBLIC_DOMAIN}}/mcp"
   it is on, so without it the token endpoint 404s and the Connections page has nothing to talk to.
 - **`AGENTS_MCP_INPROCESS`** is deliberately separate. Enabling agents should not silently widen
   what the API exposes, so serving `/mcp` from the same process is its own decision.
-- **`AGENTS_BUILTIN_MCP_URL`** is a loopback call the app makes to itself. If you pinned a
-  different port, match it here.
+- **`AGENTS_BUILTIN_MCP_URL`** is a loopback call the app makes to itself, so its port must be
+  the one the app actually listens on — the `PORT` Railway injects, which the deploy log prints as
+  `Uvicorn running on`. Getting it wrong breaks agent tool calls only, silently, while everything
+  else works.
 - **`AGENTS_EXTERNAL_MCP_URL`** is only a display value — the URL the token panel puts in the
   snippets it hands you. Left empty, the frontend derives `<protocol>//<hostname>:8765/mcp` from
   the browser location, which is right for Docker Compose and wrong here, where nothing listens on

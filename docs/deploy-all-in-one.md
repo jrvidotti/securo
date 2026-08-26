@@ -106,7 +106,7 @@ The environment is the same as `docker-compose.prod.yml` with these differences:
 | `FRONTEND_URL` | Now the app's own URL. **Still required** — see below. |
 | `BACKEND_URL` | Gone. There is no proxy. |
 | `FRONTEND_DIST_PATH` | Set by the image to `/app/frontend_dist`. Leave it alone. |
-| `UVICORN_HOST` | Bind address, default `0.0.0.0`. Set to `::` on IPv6-only networks. |
+| `UVICORN_HOST` | Bind address, default `0.0.0.0`. Leave it alone unless you know you need otherwise — see below. |
 | `UVICORN_FORWARDED_ALLOW_IPS` | Set this when behind a reverse proxy. See below. |
 | `CELERY_CONCURRENCY` | Worker processes, default `2`. `1` is plenty for one household. |
 | `AGENTS_MCP_INPROCESS` | Serves `POST /mcp` from the API instead of a separate container. |
@@ -185,9 +185,13 @@ This is the topology to use on Railway, Fly.io and similar, since the whole data
 a single mount. For Railway specifically, [deploy-railway.md](deploy-railway.md) is a
 step-by-step guide. Two things to set:
 
-- `UVICORN_HOST=::` if the platform's private network is IPv6-only.
 - `FRONTEND_URL` to the public URL the platform assigns, and the matching callback URL at
   your bank provider.
+- Nothing for the bind address. It is tempting to set `UVICORN_HOST=::` because these platforms
+  run IPv6-only private networks — Railway does — but in this topology nothing reaches the app
+  over the private network, only the public edge, and that edge needs `0.0.0.0`. An IPv6-only
+  bind gets you a 502 with `connection refused` in the platform's HTTP logs while the app's own
+  logs report a healthy `Uvicorn running on http://[::]:…`. The default is correct.
 
 Mount the volume at `/app/data`. Attachments, the knowledge store, the embedding-model cache
 and the Celery beat schedule all live under it.
