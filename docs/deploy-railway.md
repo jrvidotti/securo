@@ -52,7 +52,11 @@ egress. Useful for a database client or a one-off script; the app does not need 
 **+ New → GitHub Repo**, pointing at this repository.
 
 - **Leave Root Directory at the repository root.** The image contains both the frontend build and
-  the backend, so the build context needs both trees.
+  the backend, so the build context needs both trees — and Railway looks for `railway.json`
+  relative to that root.
+- **Nothing to configure for the build.** `railway.json` at the repository root already points
+  Railway at `backend/Dockerfile.aio`. Without it Railway finds no `./Dockerfile`, falls back to
+  its Railpack autodetector and the build dies with *"No start command detected"* — see §4.
 - **Custom Start Command: leave it empty.** The image's entrypoint runs the migrations, then
   uvicorn and a Celery worker with beat embedded. A start command here would fight it.
 - **Volume:** one, mounted at **`/app/data`**. Attachments, the agents knowledge store, the
@@ -63,7 +67,6 @@ egress. Useful for a database client or a one-off script; the app does not need 
 ### Variables
 
 ```
-RAILWAY_DOCKERFILE_PATH="backend/Dockerfile.aio"
 DATABASE_URL="${{pgvector.DATABASE_URL_PRIVATE}}"
 REDIS_URL="${{Redis.REDIS_URL}}"
 FRONTEND_URL="https://${{RAILWAY_PUBLIC_DOMAIN}}"
@@ -75,10 +78,8 @@ CELERY_CONCURRENCY="1"
 
 Generate `SECRET_KEY` yourself — Railway does not run shell commands in variables.
 
-Four of these are worth explaining:
+Three of these are worth explaining:
 
-- **`RAILWAY_DOCKERFILE_PATH`** — Railway looks for `./Dockerfile` by default and would not find
-  this one.
 - **`UVICORN_HOST="::"`** — Railway's private network is IPv6-only. `::` binds both stacks, so it
   is also correct for the public domain.
 - **`FRONTEND_URL`** is not just a CORS setting: it builds the bank OAuth callback URL
@@ -137,7 +138,40 @@ You want the `[aio]` lines from the entrypoint and a `celery@… ready` line. A 
 restarts in a loop is the entrypoint working as designed — it exits as soon as either process
 dies, so read the last error before the restart rather than the restart itself.
 
-## 4. Optional: AI agents and the MCP server
+## 4. Troubleshooting
+
+**The build fails with `No start command detected`, mentioning Railpack.**
+
+```
+using build driver railpack-v0.38.0
+⚠ Script start.sh not found
+✖ No start command detected. Specify a start command
+```
+
+Railway never saw the Dockerfile and fell back to autodetection, which cannot make sense of this
+repo. Either `railway.json` is not on the branch you deployed, or the service's **Root Directory
+is not the repository root** — Railway resolves `railway.json` relative to that root, so a
+service still pointing at `backend` will never find it.
+
+The fallback is a service variable, taking the same path relative to the repository root:
+
+```
+RAILWAY_DOCKERFILE_PATH="backend/Dockerfile.aio"
+```
+
+The build log lists every variable the service has, as `--env NAME` arguments. That list is the
+quickest way to confirm what is actually set.
+
+**The domain returns 502 although the build succeeded.** Check `UVICORN_HOST` is `::`. Bound to
+`0.0.0.0`, the app is unreachable over Railway's IPv6-only network.
+
+**Migrations fail with `pgvector is not installed`.** Wrong Postgres template — see §1.
+
+**The deployment restarts in a loop.** The entrypoint exits as soon as either process dies, so
+read the last error *before* the restart, not the restart itself. An unreachable database shows
+up here as a failed `alembic upgrade head`.
+
+## 5. Optional: AI agents and the MCP server
 
 `backend/mcp_server/` exposes ~30 Securo tools over JSON-RPC 2.0 on `POST /mcp` — read ones
 (`list_transactions`, `get_net_worth`, `get_dashboard_snapshot`, `search_all`, `aggregate`…) and
