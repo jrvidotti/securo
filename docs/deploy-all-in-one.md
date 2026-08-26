@@ -182,7 +182,8 @@ docker compose -f docker-compose.aio.yml up --build -d
 ## Platforms with one volume per service
 
 This is the topology to use on Railway, Fly.io and similar, since the whole data directory is
-a single mount. Two things to set:
+a single mount. For Railway specifically, [deploy-railway.md](deploy-railway.md) is a
+step-by-step guide. Two things to set:
 
 - `UVICORN_HOST=::` if the platform's private network is IPv6-only.
 - `FRONTEND_URL` to the public URL the platform assigns, and the matching callback URL at
