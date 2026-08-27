@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Optional, cast
 
 from sqlalchemy import CursorResult, case, select, func, update, delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.payee import Payee, PayeeMapping, PayeeTaxId
@@ -114,15 +115,11 @@ async def get_or_create_payee(
     user_id: uuid.UUID,
     name: str,
     *,
-    workspace_id: Optional[uuid.UUID] = None,
+    workspace_id: uuid.UUID,
     source: str = "sync",
     tax_id: Optional[tuple[TaxIdKind, str]] = None,
 ) -> Payee:
     """Find the payee this counterparty already is, or create it.
-
-    `user_id` is kept first for backwards compatibility with import/connection
-    sync paths. When `workspace_id` is provided, the lookup scopes by workspace;
-    otherwise the autostamp listener fills it in on insert.
 
     Resolution runs document, then name, then original name. The document
     comes first because it identifies the counterparty rather than describing
@@ -132,6 +129,10 @@ async def get_or_create_payee(
     original name is the backstop, and the reason a rename now survives —
     matching on the display name alone meant correcting a payee the bank had
     named after a document made the next sync insert a second one.
+
+    The name lookup normalises the way `uq_payees_workspace_id_lower_name`
+    does, so it finds the row that index would otherwise reject rather than
+    failing the whole sync over a case or whitespace variant.
 
     A hit fills in whatever the existing row is missing, so payees created
     before any of this acquire their document and original name the first
@@ -153,18 +154,20 @@ async def get_or_create_payee(
     if len(name) > 255:
         name = name[:255]
 
-    def _scoped(stmt):
-        """Confine a lookup to the caller's workspace, or user when it has none."""
-        if workspace_id is not None:
-            return stmt.where(Payee.workspace_id == workspace_id)
-        return stmt.where(Payee.user_id == user_id)
-
     # Oldest wins, always. Nothing stops two payees sharing a document or an
     # original name — a merge or a hand-created row can produce it — and a
     # lookup that raised on the second one would be a sync failure over data
     # the user is entitled to have.
     def _first(stmt):
-        return _scoped(stmt).order_by(Payee.created_at, Payee.id).limit(1)
+        return (
+            stmt.where(Payee.workspace_id == workspace_id)
+            .order_by(Payee.created_at, Payee.id)
+            .limit(1)
+        )
+
+    # Mirrors the uq_payees_workspace_id_lower_name index exactly, so the
+    # lookup hits the same row the unique constraint would reject.
+    by_name = _first(select(Payee).where(func.lower(func.trim(Payee.name)) == name.lower()))
 
     normalised = _normalised_tax_id(tax_id)
 
@@ -182,7 +185,7 @@ async def get_or_create_payee(
         payee = result.scalars().first()
 
     if payee is None:
-        result = await session.execute(_first(select(Payee).where(func.lower(Payee.name) == name.lower())))
+        result = await session.execute(by_name)
         payee = result.scalars().first()
 
     if payee is None:
@@ -201,13 +204,32 @@ async def get_or_create_payee(
         await session.flush()
         return payee
 
-    payee = Payee(user_id=user_id, name=name, original_name=name, source=source)
-    if workspace_id is not None:
-        payee.workspace_id = workspace_id
+    payee = Payee(
+        user_id=user_id,
+        workspace_id=workspace_id,
+        name=name,
+        original_name=name,
+        source=source,
+    )
     if normalised is not None:
         payee.type = _TYPE_BY_TAX_ID_KIND.get(normalised[0])
-    session.add(payee)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(payee)
+            await session.flush()
+    except IntegrityError:
+        # Another sync/import created it after our lookup. The savepoint keeps
+        # the caller's transaction usable; return the winner instead, carrying
+        # over the document we were about to record.
+        result = await session.execute(by_name)
+        existing = result.scalars().first()
+        if existing is None:
+            raise
+        if normalised is not None:
+            await _attach_tax_id_if_missing(session, existing, normalised)
+            await session.flush()
+        return existing
+
     if normalised is not None:
         await _attach_tax_id_if_missing(session, payee, normalised)
         await session.flush()
@@ -306,14 +328,23 @@ async def create_payee(
     user_id: uuid.UUID,
     data: PayeeCreate,
 ) -> Payee:
-    # Check uniqueness
+    name = data.name.strip()
+    if not name:
+        raise ValueError("Payee name cannot be empty")
+
+    # Raised as a code, like the tax-id errors above: the client turns it into
+    # a translated sentence, which prose in English here could never be.
     existing = await session.execute(
-        select(Payee).where(Payee.workspace_id == workspace_id, func.lower(Payee.name) == data.name.strip().lower())
+        select(Payee).where(
+            Payee.workspace_id == workspace_id,
+            func.lower(func.trim(Payee.name)) == name.lower(),
+        )
     )
     if existing.scalar_one_or_none():
-        raise ValueError("A payee with this name already exists")
+        raise ValueError("duplicate_payee_name")
 
     fields = data.model_dump(exclude={"tax_ids"})
+    fields["name"] = name
     # Stamped here rather than taken from the request: this is the path a
     # person went through a form to reach.
     payee = Payee(user_id=user_id, workspace_id=workspace_id, source="manual", **fields)
@@ -344,16 +375,20 @@ async def update_payee(
     tax_ids = update_data.pop("tax_ids", None)
 
     # Check name uniqueness if name is being changed
-    if "name" in update_data and update_data["name"]:
+    if "name" in update_data:
+        name = (update_data["name"] or "").strip()
+        if not name:
+            raise ValueError("Payee name cannot be empty")
+        update_data["name"] = name
         existing = await session.execute(
             select(Payee).where(
                 Payee.workspace_id == workspace_id,
-                func.lower(Payee.name) == update_data["name"].strip().lower(),
+                func.lower(func.trim(Payee.name)) == name.lower(),
                 Payee.id != payee_id,
             )
         )
         if existing.scalar_one_or_none():
-            raise ValueError("A payee with this name already exists")
+            raise ValueError("duplicate_payee_name")
 
     for key, value in update_data.items():
         setattr(payee, key, value)

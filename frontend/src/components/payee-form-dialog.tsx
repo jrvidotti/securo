@@ -19,7 +19,7 @@ import { TaxIdKindPicker } from '@/components/tax-id-kind-picker'
 import { fiscal as fiscalApi, payees as payeesApi } from '@/lib/api'
 import { applyMask } from '@/lib/tax-id'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
-import { payeeErrorMessage } from '@/lib/payee-errors'
+import { payeeErrorMessage } from '@/lib/payee-error-message'
 import {
   buildPayeeWritePayload,
   nextTaxIdKind,
