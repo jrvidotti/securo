@@ -25,9 +25,4 @@ COPY default.conf.template /etc/nginx/templates/default.conf.template
 ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
 COPY --chmod=755 docker-entrypoint.d/19-resolver.envsh /docker-entrypoint.d/
 
-# `worker_processes auto` counts the host's cores, not the container's limit
-# (the image's autotune script is opt-in and needs a cgroup CPU quota to help).
-# Serving a static SPA plus one proxy location does not need more than this.
-RUN sed -i 's/^worker_processes.*/worker_processes 2;/' /etc/nginx/nginx.conf
-
 EXPOSE 8080

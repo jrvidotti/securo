@@ -9,7 +9,6 @@ data:
   default.conf.template: |
     server {
         listen 8080;
-        listen [::]:8080;
         root /usr/share/nginx/html;
         index index.html;
 
