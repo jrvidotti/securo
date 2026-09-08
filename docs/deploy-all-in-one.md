@@ -41,13 +41,12 @@ just tidying up:
 ```bash
 git clone https://github.com/securo-finance/securo.git && cd securo
 cp .env.example .env
-printf 'SECRET_KEY=%s\nAGENTS_MCP_JWT_SECRET=%s\n' \
-  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> .env
+printf 'SECRET_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
 docker compose -f docker-compose.aio.yml up --build -d
 ```
 
-This compose file has no built-in fallback for either secret — it stops with a message
-naming the missing one rather than starting on a value published in this repository.
+This compose file has no built-in fallback for `SECRET_KEY` — it stops with a message naming
+it rather than starting on a value published in this repository.
 
 Open <http://localhost:8000> and create an account.
 
@@ -114,7 +113,8 @@ The environment is the same as `docker-compose.prod.yml` with these differences:
 | `UVICORN_HOST` | Bind address, default `0.0.0.0`. Set to `::` on IPv6-only networks. |
 | `UVICORN_FORWARDED_ALLOW_IPS` | Set this when behind a reverse proxy. See below. |
 | `CELERY_CONCURRENCY` | Worker processes, default `2`. `1` is plenty for one household. |
-| `SECRET_KEY` | Required, no fallback. `AGENTS_MCP_JWT_SECRET` too. |
+| `SECRET_KEY` | Required, no fallback. The stack will not start without it. |
+| `AGENTS_MCP_JWT_SECRET` | No fallback either, but only needed when you turn `/mcp` on. |
 | `AGENTS_ENABLED` | Unchanged (`false`), but see below: here it takes a second flag. |
 | `AGENTS_MCP_INPROCESS` | Serves `POST /mcp` from the API instead of a separate container. Off by default. |
 
@@ -130,12 +130,17 @@ by `--profile agents`. There is no such container here, so the API serves `POST 
 `AGENTS_ENABLED`: one turns on the agent runtime, the other publishes a network surface on
 the port your browser already talks to, and neither should imply the other.
 
-So to run the agents in this deployment, set both:
+So to run the agents in this deployment, set both — plus the secret that signs the tokens
+`/mcp` accepts, which is why you did not need one until now:
 
 ```bash
 AGENTS_ENABLED=true
 AGENTS_MCP_INPROCESS=true
+AGENTS_MCP_JWT_SECRET=$(openssl rand -hex 32)
 ```
+
+Leave that secret empty and the API logs why and declines to serve `/mcp`, rather than
+accepting tokens anyone with a copy of this repository could mint.
 
 With only `AGENTS_ENABLED`, `AGENTS_BUILTIN_MCP_URL` points at a `/mcp` that returns 404 and
 every tool call fails. With only `AGENTS_MCP_INPROCESS`, `/mcp` is up but nothing can

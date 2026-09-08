@@ -72,8 +72,12 @@ x-app-env: &app-env
   AGENTS_EXTERNAL_MCP_URL: ${AGENTS_EXTERNAL_MCP_URL:-${FRONTEND_URL:-http://localhost:8000}/mcp}
   AGENTS_EXTRA_MCP_SERVERS: ${AGENTS_EXTRA_MCP_SERVERS:-}
   # Signs the tokens the agent runtime and external MCP clients present to
-  # POST /mcp. Same reasoning as SECRET_KEY: no shipped default.
-  AGENTS_MCP_JWT_SECRET: ${AGENTS_MCP_JWT_SECRET:?generate one, e.g. openssl rand -hex 32, and put it in .env}
+  # POST /mcp. No shipped default — a signing key published in this repository
+  # signs nothing. Not required to start, though: a deployment that leaves
+  # AGENTS_MCP_INPROCESS off never uses it. When it is on and this is empty,
+  # the API logs why and declines to serve /mcp rather than accepting tokens
+  # anyone could mint.
+  AGENTS_MCP_JWT_SECRET: ${AGENTS_MCP_JWT_SECRET:-}
   # TTL for tokens minted from /agents/connections → "External MCP access".
   # Used by Claude Desktop, n8n, custom clients plugging into Securo.
   AGENTS_MCP_EXTERNAL_TTL_DAYS: ${AGENTS_MCP_EXTERNAL_TTL_DAYS:-90}

@@ -41,12 +41,12 @@ MOUNTED = 401
 ABSENT = 404
 
 
-def _mcp_status(agents: str, inprocess: str) -> int:
+def _mcp_status(agents: str, inprocess: str, secret: str = "a-real-looking-signing-secret") -> int:
     env = {
         **os.environ,
         "AGENTS_ENABLED": agents,
         "AGENTS_MCP_INPROCESS": inprocess,
-        "AGENTS_MCP_JWT_SECRET": "test-secret-not-for-production",
+        "AGENTS_MCP_JWT_SECRET": secret,
     }
     # cwd matters: mcp_server is not an installed package (pyproject's
     # packages.find includes only "app*"), it imports because the backend
@@ -80,3 +80,25 @@ def _mcp_status(agents: str, inprocess: str) -> int:
 )
 def test_mcp_mounting_follows_its_own_flag(agents, inprocess, expected):
     assert _mcp_status(agents, inprocess) == expected
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "",
+        "   ",
+        # The default in app/agents/config.py.
+        "change-me-in-production",
+        # The one docker-compose.yml ships.
+        "dev-mcp-secret-change-in-production",
+    ],
+)
+def test_mcp_refuses_to_mount_without_a_real_signing_secret(secret):
+    """Asking for /mcp is not enough — the tokens have to be worth verifying.
+
+    The compose file leaves AGENTS_MCP_JWT_SECRET empty so a deployment with
+    the flag off never has to invent one, which puts the check here. Mounting
+    on a secret published in this repository would mean an endpoint on the
+    API's own port that anyone could mint a token for.
+    """
+    assert _mcp_status("true", "true", secret=secret) == ABSENT

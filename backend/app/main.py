@@ -226,6 +226,14 @@ if feature_flag("AGENTS_ENABLED"):
         logger.exception("Agents feature flag is on but import failed; routes not mounted")
 
 
+# The MCP signing secret's default in app/agents/config.py, and the one
+# docker-compose.yml has been shipping. Both are in the repository, so both
+# are useless as signing keys.
+_PUBLISHED_PLACEHOLDER_SECRETS = frozenset(
+    {"change-me-in-production", "dev-mcp-secret-change-in-production"}
+)
+
+
 # An all-in-one deployment has no separate mcp-server container, so this
 # process answers POST /mcp itself. Its own flag, not a rider on
 # AGENTS_ENABLED: in the multi-container setup the MCP surface is deliberately
@@ -236,13 +244,27 @@ if feature_flag("AGENTS_ENABLED"):
 # nothing for it. Its own try/except: an MCP import failure must not take the
 # /api/agents routes down with it, or the other way round.
 if feature_flag("AGENTS_MCP_INPROCESS"):
-    try:
-        from mcp_server.main import router as mcp_router
+    # Serving /mcp means accepting JWTs, and the signing secret falls back to
+    # a placeholder (app/agents/config.py) that is published in this
+    # repository. Mounting on one of those would put an endpoint on the API's
+    # own port that anyone could mint a token for, so refuse — and say so,
+    # because this deployment explicitly asked for the surface. Checked here
+    # rather than in the compose file so a deployment that leaves the flag off
+    # never has to invent a secret it will not use.
+    _mcp_secret = os.getenv("AGENTS_MCP_JWT_SECRET", "").strip()
+    if not _mcp_secret or _mcp_secret in _PUBLISHED_PLACEHOLDER_SECRETS:
+        logger.error(
+            "AGENTS_MCP_INPROCESS is on but AGENTS_MCP_JWT_SECRET is unset or still a "
+            "placeholder; refusing to serve POST /mcp. Generate one, e.g. openssl rand -hex 32."
+        )
+    else:
+        try:
+            from mcp_server.main import router as mcp_router
 
-        app.include_router(mcp_router)
-        logger.info("Serving the built-in MCP server in-process at POST /mcp")
-    except Exception:
-        logger.exception("AGENTS_MCP_INPROCESS is on but the MCP router failed to import")
+            app.include_router(mcp_router)
+            logger.info("Serving the built-in MCP server in-process at POST /mcp")
+        except Exception:
+            logger.exception("AGENTS_MCP_INPROCESS is on but the MCP router failed to import")
 
 
 @app.get("/api/health")
