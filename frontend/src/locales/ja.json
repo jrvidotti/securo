@@ -1664,6 +1664,7 @@
     "edit": "取引相手を編集",
     "created": "取引相手を作成しました",
     "updated": "取引相手を更新しました",
+    "favoriteError": "お気に入りを更新できませんでした",
     "deleted": "取引相手を削除しました",
     "empty": "取引相手はまだいません",
     "searchPlaceholder": "取引相手を検索...",

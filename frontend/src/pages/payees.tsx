@@ -415,8 +415,10 @@ export default function PayeesPage() {
   // Deleting the last page's contents strands `page` past the end. `safePage`
   // already covers what renders; this keeps the state and the URL honest.
   // Adjusted during render, like the two guards above, so the URL is written
-  // once instead of once per stale value.
-  if (page > totalPages) setPage(totalPages)
+  // once instead of once per stale value. Gated on the list having arrived:
+  // during the first fetch there are no rows, `totalPages` is 1, and clamping
+  // then would throw away the page a deep link just asked for.
+  if (payeesList && page > totalPages) setPage(totalPages)
 
   const toggleSort = (by: PayeeSortBy) => {
     setSort((current) => {

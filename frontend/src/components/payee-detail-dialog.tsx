@@ -75,7 +75,13 @@ export function PayeeDetailDialog({
       {/* The body scrolls, the footer does not: a payee with five recent
           transactions is taller than a laptop viewport, and Delete below the
           fold is Delete nobody can reach. Mirrors the create/edit dialog. */}
-      <DialogContent className="sm:max-w-lg flex flex-col max-h-[calc(100dvh-2rem)]">
+      {/* The figures below are the description; Radix warns when neither a
+          DialogDescription nor this opt-out is present. Same call as
+          global-chat-panel and rule-dialog. */}
+      <DialogContent
+        className="sm:max-w-lg flex flex-col max-h-[calc(100dvh-2rem)]"
+        aria-describedby={undefined}
+      >
         <DialogHeader>
           {/* pr-8 clears the close button. Wrapping rather than truncating:
               the list ellipsizes long names, so this is the one place the

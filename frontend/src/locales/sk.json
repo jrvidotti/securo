@@ -1776,6 +1776,7 @@
     "edit": "Upraviť príjemcu",
     "created": "Príjemca vytvorený",
     "updated": "Príjemca aktualizovaný",
+    "favoriteError": "Obľúbenú položku sa nepodarilo aktualizovať",
     "deleted": "Príjemca vymazaný",
     "empty": "Zatiaľ žiadni príjemcovia",
     "searchPlaceholder": "Hľadať príjemcov...",
