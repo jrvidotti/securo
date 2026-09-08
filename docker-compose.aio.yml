@@ -19,7 +19,9 @@ x-podman:
 
 x-app-env: &app-env
   DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/securo
-  SECRET_KEY: ${SECRET_KEY:-dev-secret-change-in-production}
+  # No fallback: a signing key shipped in the repo is a signing key everyone
+  # running this file shares. `:?` fails the `up` with this message instead.
+  SECRET_KEY: ${SECRET_KEY:?generate one, e.g. openssl rand -hex 32, and put it in .env}
   DEBUG: ${DEBUG:-false}
   # Same origin as the API now, but still load-bearing: it builds the bank
   # OAuth callback (app/providers/base.py) and the OIDC redirect URI
@@ -59,14 +61,19 @@ x-app-env: &app-env
   # zero cost. Run `docker compose -f docker-compose.prod.yml --profile
   # agents up` after enabling.
   AGENTS_ENABLED: ${AGENTS_ENABLED:-false}
-  # No separate mcp-server container here; the API answers POST /mcp itself.
-  AGENTS_MCP_INPROCESS: ${AGENTS_MCP_INPROCESS:-true}
+  # There is no mcp-server container here, so the API answers POST /mcp
+  # itself — but only when asked. Off by default: it is a network surface,
+  # and the multi-container setup publishes it on its own port rather than
+  # on the API's. Turning agents on here means setting both flags.
+  AGENTS_MCP_INPROCESS: ${AGENTS_MCP_INPROCESS:-false}
   AGENTS_BUILTIN_MCP_URL: ${AGENTS_BUILTIN_MCP_URL:-http://127.0.0.1:8000/mcp}
   # What the UI hands users for external MCP clients; without it they get a
   # snippet pointing at the port the mcp-server container used to publish.
   AGENTS_EXTERNAL_MCP_URL: ${AGENTS_EXTERNAL_MCP_URL:-${FRONTEND_URL:-http://localhost:8000}/mcp}
   AGENTS_EXTRA_MCP_SERVERS: ${AGENTS_EXTRA_MCP_SERVERS:-}
-  AGENTS_MCP_JWT_SECRET: ${AGENTS_MCP_JWT_SECRET:-dev-mcp-secret-change-in-production}
+  # Signs the tokens the agent runtime and external MCP clients present to
+  # POST /mcp. Same reasoning as SECRET_KEY: no shipped default.
+  AGENTS_MCP_JWT_SECRET: ${AGENTS_MCP_JWT_SECRET:?generate one, e.g. openssl rand -hex 32, and put it in .env}
   # TTL for tokens minted from /agents/connections → "External MCP access".
   # Used by Claude Desktop, n8n, custom clients plugging into Securo.
   AGENTS_MCP_EXTERNAL_TTL_DAYS: ${AGENTS_MCP_EXTERNAL_TTL_DAYS:-90}

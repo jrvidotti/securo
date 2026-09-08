@@ -40,9 +40,14 @@ just tidying up:
 
 ```bash
 git clone https://github.com/securo-finance/securo.git && cd securo
-cp .env.example .env      # set SECRET_KEY at minimum
+cp .env.example .env
+printf 'SECRET_KEY=%s\nAGENTS_MCP_JWT_SECRET=%s\n' \
+  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> .env
 docker compose -f docker-compose.aio.yml up --build -d
 ```
+
+This compose file has no built-in fallback for either secret — it stops with a message
+naming the missing one rather than starting on a value published in this repository.
 
 Open <http://localhost:8000> and create an account.
 
@@ -109,11 +114,33 @@ The environment is the same as `docker-compose.prod.yml` with these differences:
 | `UVICORN_HOST` | Bind address, default `0.0.0.0`. Set to `::` on IPv6-only networks. |
 | `UVICORN_FORWARDED_ALLOW_IPS` | Set this when behind a reverse proxy. See below. |
 | `CELERY_CONCURRENCY` | Worker processes, default `2`. `1` is plenty for one household. |
-| `AGENTS_MCP_INPROCESS` | Serves `POST /mcp` from the API instead of a separate container. |
+| `SECRET_KEY` | Required, no fallback. `AGENTS_MCP_JWT_SECRET` too. |
+| `AGENTS_ENABLED` | Unchanged (`false`), but see below: here it takes a second flag. |
+| `AGENTS_MCP_INPROCESS` | Serves `POST /mcp` from the API instead of a separate container. Off by default. |
 
 `FRONTEND_URL` is not just a CORS setting, so do not drop it: it builds the bank OAuth
 callback URL and the OIDC redirect URI. If you put Securo on a public hostname, set it to
 that hostname.
+
+### Turning the agents on here takes two flags
+
+The multi-container setup runs the MCP server as its own container on its own port, started
+by `--profile agents`. There is no such container here, so the API serves `POST /mcp` itself
+— but it only does so when `AGENTS_MCP_INPROCESS` says to. That is a separate decision from
+`AGENTS_ENABLED`: one turns on the agent runtime, the other publishes a network surface on
+the port your browser already talks to, and neither should imply the other.
+
+So to run the agents in this deployment, set both:
+
+```bash
+AGENTS_ENABLED=true
+AGENTS_MCP_INPROCESS=true
+```
+
+With only `AGENTS_ENABLED`, `AGENTS_BUILTIN_MCP_URL` points at a `/mcp` that returns 404 and
+every tool call fails. With only `AGENTS_MCP_INPROCESS`, `/mcp` is up but nothing can
+authenticate to it: the "External MCP access" panel that mints tokens for Claude Desktop,
+n8n and the like is part of the agents API, so it is not mounted either. Set both.
 
 ## Differences you will notice
 

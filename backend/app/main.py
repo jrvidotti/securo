@@ -46,6 +46,7 @@ from app.api.admin import router as admin_router, check_registration_enabled
 from app.core.auth import fastapi_users
 from app.core.auth_policy import require_local_auth_enabled
 from app.core.config import get_settings
+from app.core.feature_flags import feature_flag
 from app.core.rate_limit import login_rate_limit, register_rate_limit, password_reset_rate_limit
 from app.core.redis import close_redis
 from app.schemas.user import UserCreate, UserRead, UserUpdate
@@ -200,7 +201,7 @@ app.include_router(info_router)
 # Optional agents/MCP/LLM module — fully gated by AGENTS_ENABLED so users
 # who don't want this feature pay zero cost (no imports, no routes, no
 # background tasks). The module itself is self-contained in app/agents/.
-if os.getenv("AGENTS_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on"):
+if feature_flag("AGENTS_ENABLED"):
     try:
         from app.agents.api.info import router as agents_info_router
         from app.agents.api.agents import router as agents_router
@@ -221,25 +222,27 @@ if os.getenv("AGENTS_ENABLED", "false").strip().lower() in ("1", "true", "yes", 
         app.include_router(agents_chat_router)
         app.include_router(agents_knowledge_router)
         logger.info("Agents feature enabled — mounted /api/agents routes")
-
-        # An all-in-one deployment has no separate mcp-server container, so
-        # this process answers POST /mcp itself. Behind its own flag rather
-        # than riding on AGENTS_ENABLED: in the multi-container setup the MCP
-        # surface is deliberately a separate app on a separately-published
-        # port, and turning agents on should not silently widen what the API
-        # exposes.
-        if os.getenv("AGENTS_MCP_INPROCESS", "false").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            from mcp_server.main import router as mcp_router
-
-            app.include_router(mcp_router)
-            logger.info("Serving the built-in MCP server in-process at POST /mcp")
     except Exception:
         logger.exception("Agents feature flag is on but import failed; routes not mounted")
+
+
+# An all-in-one deployment has no separate mcp-server container, so this
+# process answers POST /mcp itself. Its own flag, not a rider on
+# AGENTS_ENABLED: in the multi-container setup the MCP surface is deliberately
+# a separate app on a separately-published port, and turning agents on must
+# not silently widen what this API exposes. Off by default — mounting the
+# router does import app.agents (mcp_server.auth reads the shared JWT
+# settings), so a deployment that doesn't ask for the MCP surface still pays
+# nothing for it. Its own try/except: an MCP import failure must not take the
+# /api/agents routes down with it, or the other way round.
+if feature_flag("AGENTS_MCP_INPROCESS"):
+    try:
+        from mcp_server.main import router as mcp_router
+
+        app.include_router(mcp_router)
+        logger.info("Serving the built-in MCP server in-process at POST /mcp")
+    except Exception:
+        logger.exception("AGENTS_MCP_INPROCESS is on but the MCP router failed to import")
 
 
 @app.get("/api/health")
