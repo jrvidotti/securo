@@ -65,6 +65,9 @@ import {
   type PayeeSortBy,
 } from '@/lib/payee-sorting'
 
+const PAGE_SIZES = [10, 20, 50, 100]
+const DEFAULT_PAGE_SIZE = 20
+
 export default function PayeesPage() {
   const { t } = useTranslation()
   const [searchParams] = useSearchParams()
@@ -98,10 +101,14 @@ export default function PayeesPage() {
   const [page, setPage] = useState(() => Math.max(1, Number(searchParams.get('page')) || 1))
   const [pageSize, setPageSize] = useState<number>(() => {
     try {
-      const stored = localStorage.getItem('securo.payees.pageSize')
-      return stored ? Number(stored) : 20
+      // Only a size we actually offer. A stale or hand-edited entry of "0"
+      // makes totalPages Infinity and of "abc" makes it NaN, and either way
+      // the slice below comes back empty and the table renders no rows over
+      // data that loaded fine.
+      const stored = Number(localStorage.getItem('securo.payees.pageSize'))
+      return PAGE_SIZES.includes(stored) ? stored : DEFAULT_PAGE_SIZE
     } catch {
-      return 20
+      return DEFAULT_PAGE_SIZE
     }
   })
   const [previousSearch, setPreviousSearch] = useState(() => searchParams.toString())
@@ -856,8 +863,8 @@ export default function PayeesPage() {
                     <SelectValue placeholder={pageSize} />
                   </SelectTrigger>
                   <SelectContent>
-                    {['10', '20', '50', '100'].map((value) => (
-                      <SelectItem key={value} value={value}>{value}</SelectItem>
+                    {PAGE_SIZES.map((value) => (
+                      <SelectItem key={value} value={String(value)}>{value}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
