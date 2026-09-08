@@ -27,14 +27,25 @@ BACKEND = Path(__file__).resolve().parents[1]
 # code is the actual contract anyway — 401 from verify_request means the
 # router is mounted, 404 means it is not. Neither path reaches the database.
 PROBE = """
-from fastapi.testclient import TestClient
+import asyncio
+
+import httpx
 
 from app.main import app
 
-# No `with`: the lifespan warms the Tesouro cache and opens Redis, and an
-# unauthenticated POST needs neither.
-status = TestClient(app).post("/mcp", json={"jsonrpc": "2.0", "id": 1}).status_code
-print("MCP_STATUS", status)
+
+async def probe():
+    # httpx over the ASGI app, like the suite's own client fixture. Not
+    # starlette.testclient, which wants httpx2 now and warns when it cannot
+    # find it. No lifespan either: it warms the Tesouro cache and opens
+    # Redis, and an unauthenticated POST needs neither.
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 1})
+    return response.status_code
+
+
+print("MCP_STATUS", asyncio.run(probe()))
 """
 
 MOUNTED = 401

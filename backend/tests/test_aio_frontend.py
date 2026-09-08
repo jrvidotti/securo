@@ -12,9 +12,10 @@ comment.
 
 import pathlib
 
+import httpx
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from app.core.spa import FrontendCacheHeadersMiddleware
 
@@ -38,9 +39,14 @@ def dist(tmp_path: pathlib.Path) -> pathlib.Path:
     return tmp_path
 
 
-@pytest.fixture
-def client(dist: pathlib.Path) -> TestClient:
-    """An app wired the way `app.main` wires it when the dist path is set."""
+@pytest_asyncio.fixture
+async def client(dist: pathlib.Path):
+    """An app wired the way `app.main` wires it when the dist path is set.
+
+    Driven through httpx's ASGI transport, like the suite's own client
+    fixture — `starlette.testclient` now wants httpx2 and warns when it does
+    not find it, which CI turns into a collection error.
+    """
     app = FastAPI()
 
     @app.get("/api/health")
@@ -49,55 +55,58 @@ def client(dist: pathlib.Path) -> TestClient:
 
     app.add_middleware(FrontendCacheHeadersMiddleware)
     app.frontend("/", directory=str(dist), check_dir=False)
-    return TestClient(app)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
 
 
 # ---- the routing contract --------------------------------------------------
 
 
-def test_api_routes_still_win(client: TestClient):
-    assert client.get("/api/health").json() == {"status": "healthy"}
+async def test_api_routes_still_win(client: httpx.AsyncClient):
+    assert (await client.get("/api/health")).json() == {"status": "healthy"}
 
 
-def test_unknown_api_path_is_still_a_json_404(client: TestClient):
+async def test_unknown_api_path_is_still_a_json_404(client: httpx.AsyncClient):
     """The regression a root StaticFiles mount would have introduced.
 
     axios' response interceptor parses JSON; handing it the SPA shell with a
     200 would turn every 404 into a confusing render bug.
     """
-    response = client.get("/api/nope", headers=AXIOS_ACCEPT)
+    response = await client.get("/api/nope", headers=AXIOS_ACCEPT)
     assert response.status_code == 404
     assert response.json() == {"detail": "Not Found"}
 
 
-def test_wrong_method_on_an_api_route_is_still_405(client: TestClient):
-    assert client.post("/api/health", headers=AXIOS_ACCEPT).status_code == 405
+async def test_wrong_method_on_an_api_route_is_still_405(client: httpx.AsyncClient):
+    assert (await client.post("/api/health", headers=AXIOS_ACCEPT)).status_code == 405
 
 
-def test_browser_navigation_gets_the_shell(client: TestClient):
+async def test_browser_navigation_gets_the_shell(client: httpx.AsyncClient):
     """A deep link like /transactions has no route; the SPA router handles it."""
-    response = client.get("/transactions", headers=BROWSER_ACCEPT)
+    response = await client.get("/transactions", headers=BROWSER_ACCEPT)
     assert response.status_code == 200
     assert 'id="root"' in response.text
 
 
-def test_root_is_the_shell_whatever_the_accept_header(client: TestClient):
-    response = client.get("/", headers={"Accept": "*/*"})
+async def test_root_is_the_shell_whatever_the_accept_header(client: httpx.AsyncClient):
+    response = await client.get("/", headers={"Accept": "*/*"})
     assert response.status_code == 200
     assert 'id="root"' in response.text
 
 
-def test_non_navigation_request_for_a_spa_route_is_a_404(client: TestClient):
+async def test_non_navigation_request_for_a_spa_route_is_a_404(client: httpx.AsyncClient):
     """Documented caveat, not a bug — but surprising enough to pin down.
 
     curl sends `Accept: */*`, so it gets a 404 where nginx's `try_files`
     returned the shell. Uptime probes must target /api/health instead.
     """
-    assert client.get("/transactions", headers={"Accept": "*/*"}).status_code == 404
+    assert (await client.get("/transactions", headers={"Accept": "*/*"})).status_code == 404
 
 
-def test_hashed_assets_are_served(client: TestClient):
-    response = client.get("/static/app-a1b2c3.js")
+async def test_hashed_assets_are_served(client: httpx.AsyncClient):
+    response = await client.get("/static/app-a1b2c3.js")
     assert response.status_code == 200
     assert response.text == "console.log(1)"
 
@@ -105,20 +114,20 @@ def test_hashed_assets_are_served(client: TestClient):
 # ---- caching ---------------------------------------------------------------
 
 
-def test_shell_is_never_cached(client: TestClient):
+async def test_shell_is_never_cached(client: httpx.AsyncClient):
     """A cached shell keeps requesting asset hashes a deploy has replaced."""
     for path, headers in (("/", {"Accept": "*/*"}), ("/transactions", BROWSER_ACCEPT)):
-        assert client.get(path, headers=headers).headers["cache-control"] == "no-store"
+        assert (await client.get(path, headers=headers)).headers["cache-control"] == "no-store"
 
 
-def test_hashed_assets_are_cached_forever(client: TestClient):
-    response = client.get("/static/app-a1b2c3.js")
+async def test_hashed_assets_are_cached_forever(client: httpx.AsyncClient):
+    response = await client.get("/static/app-a1b2c3.js")
     assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
-def test_api_responses_are_left_alone(client: TestClient):
+async def test_api_responses_are_left_alone(client: httpx.AsyncClient):
     """The middleware must not start dictating caching for the API."""
-    assert "cache-control" not in client.get("/api/health").headers
+    assert "cache-control" not in (await client.get("/api/health")).headers
 
 
 # ---- the default: off ------------------------------------------------------
